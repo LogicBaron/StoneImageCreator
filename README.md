@@ -1,0 +1,2 @@
+# diffusion
+diffusion model practice
