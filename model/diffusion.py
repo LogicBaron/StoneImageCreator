@@ -19,10 +19,9 @@ def schedule_beta_linear(num_timesteps):
 class DiffusionModel():
     def __init__(self, 
                  model,
-                 num_timesteps,
-                 betas,
-                 alphas):
-        self.model = Model
+                 num_timesteps):
+        self.model = model
+
         # forward process variances to constants increasing linearly from 1e-4 ~ 0.02.
         betas = schedule_beta_linear(num_timesteps)
         alpha = 1. - betas
@@ -55,7 +54,18 @@ class DiffusionModel():
         
         x = forward_process_coef1.gather(-1, t).view(b, 1, 1, 1) * img + \
             forward_process_coef2.gather(-1, t).view(b, 1, 1, 1) * epsilon
-        
+
+        model_out = self.model(x)
+
+        loss = self.loss_fn(model_out, epsilon, reduction = 'none')
+
+        return loss.mean()
+
+    def q_sample():
+        """
+        backward process of remove noise.
+        """
+
         # unscale image data.
         img = unscale_img_linear(img)
 
