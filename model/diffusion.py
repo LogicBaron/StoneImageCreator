@@ -1,6 +1,7 @@
 import math
 import torch
 from torch import nn
+import torch.nn.functional as F
 
 from model import UNet
 
@@ -21,6 +22,7 @@ class DiffusionModel():
                  model,
                  num_timesteps):
         self.model = model
+        self.loss = F.mse_loss
 
         # forward process variances to constants increasing linearly from 1e-4 ~ 0.02.
         betas = schedule_beta_linear(num_timesteps)
