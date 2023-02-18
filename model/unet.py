@@ -22,32 +22,57 @@ class UNet(nn.Module):
         # initial projection
         image_channel = 3 * (2 if self_condition else 1)
         self.init_conv = nn.Conv2d(image_channel, in_dim, kernel_size = 3, padding = 1)
-
         # time projection
-        self.time_emb = TimeEmbedding(in_dim * 4)
-
+        self.time_emb = TimeEmbedding(time_dim)
         # down-sampling module list
         self.downs = nn.ModuleList([])
         for idx, (dim1, dim2) in enumerate(in_out):
             is_last = ind >= (num_resolutions - 1)
-            self.downs.append(DownBlock(dim1, dim2, time_dim=time_dim, has_attn=is_attn[i]))
-            self.downs.append(DownBlock(dim2, dim2, time_dim=time_dim, has_attn=is_attn[i]))
+            self.downs.append(DownBlock(dim1, dim2, time_dim=time_dim, n_groups=32, has_attn=is_attn[i]))
+            self.downs.append(DownBlock(dim2, dim2, time_dim=time_dim, n_groups=32, has_attn=is_attn[i]))
             if idx < num_resolutions - 1:
                 self.downs.append(DownSample(dim2, dim2))
-
-
+        # Middle Process
+        self.mid = MidBlock(dim_mults[-1], time_dim)
+        # UpSampling
+        self.ups = nn.ModuleList([])
+        for idx, (dim1, dim2) in enumerate(reverse(in_out)):
+            self.ups.append(UpBlock(dim1+dim2, dim1, time_dim=time_dim, n_groups=32, is_attn[i]))
+            self.ups.append(UpBlock(dim1, dim1, time_dim=time_dim, n_groups=32, is_attn[i]))
+            if idx < num_resolutions - 1:
+                self.ups.append(Upsample(dim1))
+        # final
+        self.final_convres = ConvResBlock(in_dim, out_dim, time_dim, n_groups=8)
+        self.final_conv = nn.Conv2d(in_dim, 3, kernel_size=1)
 
     def forward(self, x: torch.Tensor, t: torch.Tensor):
         """
         x : B x C x H x W
         t : B
         """
-        pass
+        t = self.time_emb(t)
+        x = self.init_conv(x)
+        h = [x]
+        # Down sampling
+        for down in self.downs:
+            x = down(x, t)
+            h.append(x)
+        x = self.mid(x)
+        for up in self.ups:
+            if isinstance(up, UpSample):
+                x = up(x, t)
+            else:
+                s = h.pop()
+                x = torch.cat((x, s), dim=1)
+                x = up(x, t)
+        x = self.final_convres(x)
+        x = self.final_conv(x)
+        return x
 
 class DownBlock(nn.Module):
     def __init__(self, in_dim: int, out_dim: int, time_dim: int, n_groups: int, has_attn: bool):
         super().__init__()
-        self.convres = ConvResBlock(in_dim, out_dim:, time_dim, n_groups)
+        self.convres = ConvResBlock(in_dim, out_dim, time_dim, n_groups)
         if has_attn:
             self.attn = AttentionBlock(out_dim)
         else:
@@ -65,7 +90,46 @@ class DownSample(nn.Module):
         # use strides instead of max-pooling.
         self.conv = nn.Conv2d(in_dim, out_dim, kernel_size=3, stride=2, padding=1)
     
-    def forward(self, x: torch.Tensor):
+    def forward(self, x: torch.Tensor, t: torch.Tensor):
+        _ = t
+        return self.conv(x)
+
+
+class MidBlock(nn.Module):
+    def __init__(self, in_dim: int, time_dim: int, n_groups: int):
+        super().__init__()
+        self.convres1 = ConvResBlock(in_dim, in_dim, time_dim)
+        self.attn1 = AttentionBlock(in_dim)
+        self.convres2 = ConvResBlock(in_dim, in_dim, time_dim)
+    
+    def forward(self, x: torch.Tensor, t: torch.Tensor):
+        x = self.convres1(x, t)
+        x = self.attn1(x)
+        x = self.convres2(x, t)
+        return x
+
+
+class UpBlock(nn.Module):
+    def __init__(self, in_dim: int, out_dim: int, time_dim: int, n_groups: int, has_attn: bool):
+        self.convres = ConvResBlock(in_dim, out_dim, time_dim, n_groups)
+        if has_attn:
+            self.attn = AttentionBlock(out_dim)
+        else:
+            self.attn = nn.Identity()
+
+    def forward(self, x: torch.Tensor, t: torch.Tensor):
+        x = self.convres(x, t)
+        x = self.attn(x)
+        return x
+
+
+class UpSample(nn.Module):
+    def _init__(self, in_dim):
+        super().__init__()
+        self.conv = nn.ConvTranspose2d(in_dim, in_dim, kernel_sze=4, strid=2, padding=1)
+    
+    def forward(self, x: torch.Tensor, t: torch.Tensor):
+        _ = t
         return self.conv(x)
 
 

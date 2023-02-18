@@ -1,2 +1,2 @@
 from .diffusion import DiffusionModel
-from .unet import Unet
+from .unet import UNet

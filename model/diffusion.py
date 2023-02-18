@@ -3,7 +3,7 @@ import torch
 from torch import nn
 import torch.nn.functional as F
 
-from .unet import Unet
+from .unet import UNet
 
 def scale_img_linear(img):
     return img * 2 - 1
