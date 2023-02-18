@@ -1,9 +1,9 @@
 import torch
-from model import Unet, DiffusionModel
+from model import UNet, DiffusionModel
 
 def main():
     # load model
-    model = Unet()
+    model = UNet()
     ddpm = DiffusionModel(model = model,
                           num_timesteps=1000)
     
@@ -20,7 +20,7 @@ def main():
     print(ddpm)
 
     x = torch.rand(64,3,256,256).float()
-    print(ddpm(x))
+    print(ddpm(x.float()))
     """
     for epoch in range(5):
         # train

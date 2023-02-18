@@ -15,7 +15,7 @@ def schedule_beta_linear(num_timesteps):
     scale = 1000/num_timesteps
     beta_start = scale * 1e-4
     beta_end = scale * 0.02
-    return torch.linspace(beta_start, beta_end, num_timesteps, dtype=torch.float64)
+    return torch.linspace(beta_start, beta_end, num_timesteps, dtype=torch.float)
 
 class DiffusionModel(nn.Module):
     def __init__(self, 
@@ -60,10 +60,9 @@ class DiffusionModel(nn.Module):
         # if t is 1, the diffused image is assumed to be noiseless at the end of sampling.
         t = torch.randint(0, self.num_timesteps, (b,), device = img.device).long()
         epsilon = torch.randn_like(img)
-        
+
         x = self.forward_process_coef1.gather(-1, t).view(b, 1, 1, 1) * img + \
             self.forward_process_coef2.gather(-1, t).view(b, 1, 1, 1) * epsilon
-
         model_out = self.model(x, t)
 
         loss = self.loss_fn(model_out, epsilon, reduction = 'none')

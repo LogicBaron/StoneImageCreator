@@ -1,6 +1,8 @@
 """
 top-down 
 """
+import math
+
 import torch
 from torch import nn
 
@@ -10,14 +12,18 @@ class UNet(nn.Module):
                  out_dim: int = None,
                  dim_mults = (1, 2, 4, 8),
                  is_attn = (False, False, True, True),
-                 self_condition = Flase):
+                 self_condition = False):
         super().__init__()
         self.n_resolutions = len(dim_mults)
         dim_mults = [*map(lambda x: in_dim * x, dim_mults)]
         in_out = list(zip(dim_mults[:-1], dim_mults[1:]))
-
+        # base dimension
+        self.in_dim = in_dim
+        out_dim = in_dim if out_dim is None else out_dim
+        self.out_dim = out_dim
         # Time embeding channel is 4 times of image dimension.
-        self.time_dim = self.n_channels * 4
+        time_dim = in_dim*4
+        self.time_dim = time_dim
 
         # initial projection
         image_channel = 3 * (2 if self_condition else 1)
@@ -26,24 +32,30 @@ class UNet(nn.Module):
         self.time_emb = TimeEmbedding(time_dim)
         # down-sampling module list
         self.downs = nn.ModuleList([])
+        print(in_out)
         for idx, (dim1, dim2) in enumerate(in_out):
-            is_last = ind >= (num_resolutions - 1)
-            self.downs.append(DownBlock(dim1, dim2, time_dim=time_dim, n_groups=32, has_attn=is_attn[i]))
-            self.downs.append(DownBlock(dim2, dim2, time_dim=time_dim, n_groups=32, has_attn=is_attn[i]))
-            if idx < num_resolutions - 1:
+            print(dim1, dim2)
+            self.downs.append(DownBlock(in_dim=dim1, out_dim=dim2, time_dim=time_dim, n_groups=32, has_attn=is_attn[idx]))
+            self.downs.append(DownBlock(in_dim=dim2, out_dim=dim2, time_dim=time_dim, n_groups=32, has_attn=is_attn[idx]))
+            if idx < self.n_resolutions - 1:
                 self.downs.append(DownSample(dim2, dim2))
         # Middle Process
-        self.mid = MidBlock(dim_mults[-1], time_dim)
+        self.mid = MidBlock(dim_mults[-1], time_dim, n_groups=32)
         # UpSampling
         self.ups = nn.ModuleList([])
-        for idx, (dim1, dim2) in enumerate(reverse(in_out)):
-            self.ups.append(UpBlock(dim1+dim2, dim1, time_dim=time_dim, n_groups=32, is_attn[i]))
-            self.ups.append(UpBlock(dim1, dim1, time_dim=time_dim, n_groups=32, is_attn[i]))
-            if idx < num_resolutions - 1:
-                self.ups.append(Upsample(dim1))
+        for idx, (dim1, dim2) in enumerate(reversed(in_out)):
+            print(dim2, dim1)
+            self.ups.append(UpBlock(dim1+dim2, dim1, time_dim=time_dim, n_groups=32, has_attn=is_attn[idx]))
+            self.ups.append(UpBlock(dim1, dim1, time_dim=time_dim, n_groups=32, has_attn=is_attn[idx]))
+            if idx < self.n_resolutions - 1:
+                self.ups.append(UpSample(dim1))
         # final
-        self.final_convres = ConvResBlock(in_dim, out_dim, time_dim, n_groups=8)
-        self.final_conv = nn.Conv2d(in_dim, 3, kernel_size=1)
+        self.final_norm = nn.GroupNorm(8, in_dim)
+        self.final_act = nn.GELU()
+        self.final_conv = nn.Conv2d(in_dim, out_dim, kernel_size=(3,3), padding=(1,1))
+        self.final_res = nn.Conv2d(in_dim, out_dim, kernel_size=(1,1)) if in_dim!=out_dim else nn.Identity()
+        # output convolution
+        self.out_conv = nn.Conv2d(out_dim, image_channel, kernel_size=1)
 
     def forward(self, x: torch.Tensor, t: torch.Tensor):
         """
@@ -65,8 +77,10 @@ class UNet(nn.Module):
                 s = h.pop()
                 x = torch.cat((x, s), dim=1)
                 x = up(x, t)
-        x = self.final_convres(x)
-        x = self.final_conv(x)
+        h = self.final_norm(x)
+        h = self.final_act(h)
+        h = self.final_conv(h)
+        out = self.out_conv(h+self.final_res(x))
         return x
 
 class DownBlock(nn.Module):
@@ -76,7 +90,7 @@ class DownBlock(nn.Module):
         if has_attn:
             self.attn = AttentionBlock(out_dim)
         else:
-            self.attn = nn.Identity
+            self.attn = nn.Identity()
     
     def forward(self, x: torch.Tensor, t: torch.Tensor):
         x = self.convres(x, t)
@@ -98,9 +112,9 @@ class DownSample(nn.Module):
 class MidBlock(nn.Module):
     def __init__(self, in_dim: int, time_dim: int, n_groups: int):
         super().__init__()
-        self.convres1 = ConvResBlock(in_dim, in_dim, time_dim)
+        self.convres1 = ConvResBlock(in_dim, in_dim, time_dim, n_groups)
         self.attn1 = AttentionBlock(in_dim)
-        self.convres2 = ConvResBlock(in_dim, in_dim, time_dim)
+        self.convres2 = ConvResBlock(in_dim, in_dim, time_dim, n_groups)
     
     def forward(self, x: torch.Tensor, t: torch.Tensor):
         x = self.convres1(x, t)
@@ -111,6 +125,7 @@ class MidBlock(nn.Module):
 
 class UpBlock(nn.Module):
     def __init__(self, in_dim: int, out_dim: int, time_dim: int, n_groups: int, has_attn: bool):
+        super().__init__()
         self.convres = ConvResBlock(in_dim, out_dim, time_dim, n_groups)
         if has_attn:
             self.attn = AttentionBlock(out_dim)
@@ -124,9 +139,9 @@ class UpBlock(nn.Module):
 
 
 class UpSample(nn.Module):
-    def _init__(self, in_dim):
+    def __init__(self, in_dim):
         super().__init__()
-        self.conv = nn.ConvTranspose2d(in_dim, in_dim, kernel_sze=4, strid=2, padding=1)
+        self.conv = nn.ConvTranspose2d(in_dim, in_dim, kernel_size=4, stride=2, padding=1)
     
     def forward(self, x: torch.Tensor, t: torch.Tensor):
         _ = t
@@ -137,19 +152,18 @@ class ConvResBlock(nn.Module):
     """
     All models have two convolution residual blocks per resolution level.
     """
-    def __init__(self, in_dim: int, out_dim: int, n_groups: int = 32, dropout: float = 0.1):
+    def __init__(self, in_dim: int, out_dim: int, time_dim: int, n_groups: int = 32, dropout: float = 0.1):
         """
         DDPM paper: We replaced weight normalization with group normalization
         n_grups: # of groups for group normalization
         """
         super().__init__()
-
         self.norm1 = nn.GroupNorm(n_groups, in_dim)
-        self.act1 = nn.GeLU()
+        self.act1 = nn.GELU()
         self.conv1 = nn.Conv2d(in_dim, out_dim, kernel_size=(3,3), padding=(1,1))
 
         self.norm2 = nn.GroupNorm(n_groups, out_dim)
-        self.act2 = nn.GeLU()
+        self.act2 = nn.GELU()
         self.conv2 = nn.Conv2d(out_dim, out_dim, kernel_size=(3,3), padding=(1,1))
 
         if in_dim != out_dim:
@@ -158,10 +172,10 @@ class ConvResBlock(nn.Module):
             self.res = nn.Identity()
 
         # Linear Layer for time embedding
-        self.time_ln = nn.Linear(t_dim, out_dim)
-        self.time_act = nn.GeLU()
+        self.time_ln = nn.Linear(time_dim, out_dim)
+        self.time_act = nn.GELU()
 
-        self.dropout = nn.dropout(dropout)
+        self.dropout = nn.Dropout(dropout)
 
     def forward(self, x: torch.Tensor, t: torch.Tensor):
         """
@@ -169,7 +183,7 @@ class ConvResBlock(nn.Module):
         t : `[B, time_dim]`
         """
         h = self.conv1(self.act1(self.norm1(x)))
-        h += self.time_ln(self.time_cat(t))[:, :, None, None]
+        h += self.time_ln(self.time_act(t))[:, :, None, None]
         h = self.conv2(self.dropout(self.act2(self.norm2(h))))
         return h + self.res(x)
 
@@ -179,7 +193,7 @@ class AttentionBlock(nn.Module):
     All Models have self-attention blocks at the 16 x 16 resolution between the  convolutional blocks
     """
     def __init__(self, in_dim, n_heads: int = 4, dim_head: int = 32, n_groups: int = 32):
-        super().__Init__()
+        super().__init__()
         self.scale = dim_head ** -0.5
         self.n_heads = n_heads
         self.dim_head = dim_head
@@ -192,15 +206,15 @@ class AttentionBlock(nn.Module):
         """
         x : `[B, in_dim, h, w]`
         """
-        b, c, h, w = x.shape
+        batch, channel, height, width = x.shape
         h = self.norm(x) # x: `[b, c, h, w]`
-        h = h.view(b, c, -1).permute(0, 2, 1) # x : `[b, h+w, c]`
-        q, k, v = self.to_qkv(h).chunk(3, dim = 1) # q, k, v: `[b, h+w, n_heads * dim_head]`
-        attn = torch.matmul(q, k.transpose(-1, -2)) * self.scale # `[b, h+w, h+w]`
-        attn = attn.softmax(dim=2) # `[b, h+w, h+w]`
-        out = torch.matmul(attn, v) # `[b, h+w, n_heads * dim_head]`
-        out = self.to_out(out) # `[b, h+w, c]`
-        out = out.permute(0, 2, 1).view(b, c, h, w) # out: `[b, c, h, w]`
+        h = h.view(batch, channel, -1).permute(0, 2, 1) # x : `[b, hw, c]`
+        q, k, v = self.to_qkv(h).chunk(3, dim = -1) # q, k, v: `[b, hw, n_heads * dim_head]`
+        attn = torch.matmul(q, k.transpose(-1, -2)) * self.scale # `[b, hw, hw]`
+        attn = attn.softmax(dim=2) # `[b, hw]`
+        out = torch.matmul(attn, v) # `[b, hw, n_heads * dim_head]`
+        out = self.to_out(out) # `[b, hw, c]`
+        out = out.permute(0, 2, 1).view(batch, channel, height, width) # out: `[b, c, h, w]`
 
         return out + x
 
@@ -212,7 +226,7 @@ class TimeEmbedding(nn.Module):
         super().__init__()
         self.time_dim = time_dim
         self.ln1 = nn.Linear(self.time_dim // 4, self.time_dim)
-        self.act1 = nn.GeLU()
+        self.act1 = nn.GELU()
         self.ln2 = nn.Linear(self.time_dim, self.time_dim)
     
     def forward(self, t: torch.Tensor):
