@@ -10,8 +10,8 @@ class UNet(nn.Module):
     def __init__(self, 
                  in_dim: int = 64,
                  out_dim: int = None,
-                 dim_mults = (1, 2, 2, 4),
-                 is_attn = (False, False, False, True),
+                 dim_mults = (1, 2, 4, 8),
+                 is_attn = (False, True, False, False),
                  self_condition = False):
         super().__init__()
         self.n_resolutions = len(dim_mults)
@@ -151,7 +151,7 @@ class ConvResBlock(nn.Module):
     """
     All models have two convolution residual blocks per resolution level.
     """
-    def __init__(self, in_dim: int, out_dim: int, time_dim: int, n_groups: int = 32, dropout: float = 0.1):
+    def __init__(self, in_dim: int, out_dim: int, time_dim: int, n_groups: int = 8, dropout: float = 0.1):
         """
         DDPM paper: We replaced weight normalization with group normalization
         n_grups: # of groups for group normalization
@@ -191,7 +191,7 @@ class AttentionBlock(nn.Module):
     """
     All Models have self-attention blocks at the 16 x 16 resolution between the  convolutional blocks
     """
-    def __init__(self, in_dim, n_heads: int = 4, dim_head: int = 32, n_groups: int = 32):
+    def __init__(self, in_dim, n_heads: int = 4, dim_head: int = 32, n_groups: int = 8):
         super().__init__()
         self.scale = dim_head ** -0.5
         self.n_heads = n_heads
