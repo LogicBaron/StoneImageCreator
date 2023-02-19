@@ -28,7 +28,10 @@ def collate_fn(examples):
 
 def main():
     # load model
-    model = UNet()
+    model = UNet(in_dim=64,
+                 dim_mults = (1, 2, 4, 8),
+                 is_attn = (False, True, False, False)
+                 )
     ddpm = DiffusionModel(model = model,
                           num_timesteps=1000)
     print(ddpm)
@@ -46,7 +49,7 @@ def main():
     optimzer = torch.optim.Adam(ddpm.parameters(), lr=2e-4)
 
     ddpm.to(torch.device("cuda:3"))
-    
+    best_loss = 10_000
     for epoch in range(5):
         # train
         print(f"{epoch}th epoch training...")
@@ -64,6 +67,9 @@ def main():
             for batch_idx, batch in enumerate(tqdm(test_dataloader)):
                 total_loss += ddpm(batch["img_input"].to("cuda:3"))
             print(f"eval loss : {total_loss/len(test_dataloader)}")
+            if total_loss/len(test_dataloader) < best_loss:
+                best_loss = total_loss/len(test_dataloader)
+                torch.save(ddpm.state_dict(), "best_mode.pt")
     
 
 if __name__ == "__main__":
