@@ -5,71 +5,68 @@ import torch
 from torch.utils.data import DataLoader
 from datasets import load_dataset
 from transformers import CLIPImageProcessor
-from torchvision.transforms import Compose, Normalize, ToTensor
+from torchvision import transforms
 
 from model import UNet, DiffusionModel
+# from model.unet_ import UNet
+# from model.diffusion_ import DenoiseDiffusion
+from utils import make_grid
 
-def transforms(examples):
-    jitter = Compose([
-        ToTensor(),
-        Normalize(mean=[0.4913, 0.4821, 0.4465], std=[0.2470, 0.2434, 0.2615]),
+from labml import lab, tracker, experiment, monit
+
+def transform(examples):
+    jitter = transforms.Compose([
+        transforms.Resize((64, 64)),
+        # transforms.RandomHorizontalFlip(),
+        transforms.ToTensor(),
+        transforms.Normalize(mean=[0.5], std=[0.5]),
      ])
-    examples["pixel_values"] = [jitter(image.convert("RGB")) for image in examples["img"]]
-    return examples
-
-
-def collate_fn(examples):
-    images = []
-    for example in examples:
-        images.append((example['pixel_values']))
-    images = torch.stack(images)
-    return {'img_input': images}
-
+    image_tensors = [jitter(image.convert("RGB")) for image in examples["image"]]
+    return {'img_input': image_tensors}
 
 def main():
     # load model
+    
     model = UNet(in_dim=64,
-                 dim_mults = (1, 2, 4, 8),
-                 is_attn = (False, True, False, False)
+                 #dim_mults = (1, 2, 2, 4, 8),
+                 #is_attn = (False, False, False, False, True)
+                 dim_mults = (1, 2, 2, 4, 4),
+                 is_attn = (False, False, False, False, True)
                  )
-    ddpm = DiffusionModel(model = model,
-                          num_timesteps=1000)
-    print(ddpm)
+    diffusion = DiffusionModel(model = model,
+                          num_timesteps=1_000)
+
+    print(diffusion)
     # load data
-    dataset = load_dataset("cifar10")
+    dataset = load_dataset("huggan/smithsonian_butterflies_subset") # tglcourse/CelebA-faces-cropped-128
     # simple transform
     train_dataset = dataset['train']
-    train_dataset.set_transform(transforms)
-    train_dataloader = DataLoader(train_dataset, collate_fn=collate_fn, batch_size=128)
-    test_dataset = dataset['test'].with_transform(transforms)
-    test_dataset.set_transform(transforms)
-    test_dataloader = DataLoader(test_dataset, collate_fn=collate_fn, batch_size=128)
-
+    train_dataset.set_transform(transform)
+    train_dataloader = DataLoader(train_dataset, batch_size=64)
     # load optimizer, scheduler
-    optimzer = torch.optim.Adam(ddpm.parameters(), lr=2e-4)
+    optimizer = torch.optim.AdamW(diffusion.parameters(), lr=2e-5)
+    scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=1000)
+    diffusion.to(torch.device("cuda:3"))
 
-    ddpm.to(torch.device("cuda:3"))
-    best_loss = 10_000
-    for epoch in range(5):
+
+    for epoch in range(1000):
         # train
         print(f"{epoch}th epoch training...")
-        total_loss = 0
         for batch_idx, batch in enumerate(tqdm(train_dataloader)):
-            loss = ddpm(batch['img_input'].to("cuda:3"))
+            data = batch['img_input'].to("cuda:3")
+            optimizer.zero_grad()
+            loss = diffusion(data)
             loss.backward()
-            optimzer.step()
-            optimzer.zero_grad()
-            total_loss += loss
-        print(f"train loss : {total_loss/len(train_dataloader)}")
+            optimizer.step()
+        print(f"train_loss: {loss}, lr: {scheduler.get_lr()}")
+        scheduler.step()
         # eval
-        with torch.no_grad():
-            total_loss = 0
-            for batch_idx, batch in enumerate(tqdm(test_dataloader)):
-                total_loss += ddpm(batch["img_input"].to("cuda:3"))
-            print(f"eval loss : {total_loss/len(test_dataloader)}")
-            if total_loss/len(test_dataloader) < best_loss:
-                best_loss = total_loss/len(test_dataloader)
-                torch.save(ddpm.state_dict(), "best_mode.pt")
+        if epoch%50 == 49:
+            with torch.no_grad():
+                x = diffusion.sample(16,3,64)
+            imgs_grid = make_grid(x, 4, 4)
+            imgs_grid.save(f"sample/sample_{epoch}.png")
+            torch.save(diffusion.state_dict(), f"best_model_{epoch}.pt")
     
 
 if __name__ == "__main__":
