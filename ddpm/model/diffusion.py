@@ -36,10 +36,12 @@ class DiffusionModel(nn.Module):
         self.register_buffer('alphas_cumprod', torch.cumprod(self.alphas, dim=0))
         # loss
         self.loss_fn = F.mse_loss
-        # loss weight, from https://arxiv.org/abs/2204.00227
-        self.p2_loss_weight_gamma = 0
-        self.p2_loss_weight_k = 1
-        self.register_buffer('p2_loss_weight', (1. - self.alphas_cumprod_prev) * torch.sqrt(self.alphas) / (1. - self.alphas_cumprod))
+
+        # p2 loss weight, from https://arxiv.org/abs/2204.00227
+        p2_loss_weight_gamma = 0
+        p2_loss_weight_k = 1
+        alphas_cumprod_prev = F.pad(alphas_cumprod[:-1], (1, 0), value = 1.)
+        self.p2_loss_weight = (p2_loss_weight_k + alphas_cumprod / (1 - alphas_cumprod)) ** -p2_loss_weight_gamma)
 
         # sampling
         self.sampling_timesteps = sampling_timesteps if sampling_timesteps is not None else num_timesteps
