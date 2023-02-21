@@ -34,11 +34,6 @@ class DiffusionModel(nn.Module):
         self.register_buffer('betas', schedule_beta_linear(self.num_timesteps))
         self.register_buffer('alphas', 1. - self.betas)
         self.register_buffer('alphas_cumprod', torch.cumprod(self.alphas, dim=0))
-        self.register_buffer('alphas_cumprod_prev', F.pad(self.alphas_cumprod[:-1], (1,0), value=1.))
-        # coefficients for closed form forward process q(x_t | x_0).
-        self.register_buffer('forward_process_coef1', torch.sqrt(self.alphas_cumprod))
-        self.register_buffer('forward_process_coef2', torch.sqrt(1. - self.alphas_cumprod))
-        # coefficients for closed form backward process p(x_t-1 | x_t)
         # loss
         self.loss_fn = F.mse_loss
         # loss weight, from https://arxiv.org/abs/2204.00227
@@ -53,63 +48,80 @@ class DiffusionModel(nn.Module):
 
     def forward(self, img):
         """
-        diffusion process.
+        Training Process.
+        Implementation of `Algorithm1. Training`
         x : B x C x H x W
         """
         # image data scaled linearlly to [-1, 1] in ddpm.
         img = scale_img_linear(img)
 
         b, c, h, w = img.size()
-        # t ~ Uniform({1,...,T}), epsilon ~ normal(0, I)
+        # t ~ Uniform({1,...,T}), noise ~ normal(0, I)
         # if t is 0, the diffused image is original image.
         # if t is 1, the diffused image is assumed to be noiseless at the end of sampling.
         t = torch.randint(0, self.num_timesteps, (b,), device = img.device).long()
-        epsilon = torch.randn_like(img)
+        noise = torch.randn_like(img)
 
-        x = self.forward_process_coef1.gather(-1, t).view(b, 1, 1, 1) * img + \
-            self.forward_process_coef2.gather(-1, t).view(b, 1, 1, 1) * epsilon
+        x = self.q_sample(img, t, noise=noise)
         model_out = self.model(x, t)
 
-        loss = self.loss_fn(model_out, epsilon, reduction = 'none')
+        loss = self.loss_fn(model_out, noise, reduction = 'none')
         loss = self.p2_loss_weight.gather(-1, t).view(b,1,1,1) * loss
 
         return loss.mean()
 
     @torch.no_grad()
-    def sample(self, n_samples, img_channels, img_size):
+    def sample(self, n_samples, img_channels, img_size, noise_clamp=False, denoised_clamp=False):
+        """
+        Implementation of `Algorithm2. Sampling`
+        """
         x = torch.randn([n_samples, img_channels, img_size, img_size], device=self.betas.device)
         for _, t_ in tqdm(enumerate(range(self.num_timesteps))):
             t = self.num_timesteps - t_ - 1
-            x = self.p_sample(x, x.new_full((n_samples,), t, dtype=torch.long))
+            x = self.p_sample(x, x.new_full((n_samples,), t, dtype=torch.long),
+                              noise_clamp=noise_clamp,
+                              denoised_clamp=denoised_clamp)
+        x = unscale_img_linear(x.clamp(min=-1, max=1))
         return x
 
     @torch.no_grad()
-    def p_sample(self, x: torch.Tensor, t: torch.Tensor):
+    def p_sample(self, x: torch.Tensor, t: torch.Tensor, noise_clamp=False, denoised_clamp=False):
+        """
+        rever process. remove noise from input.
+        Implementation of  `Algorithm2. Sampling`'s inner loop.
+        We use sigma as sqrt(betas).
+        """
         pred_noise = self.model(x, t)
+        if noise_clamp:
+            pred_noise = pred_noise.clamp(min=-1, max=1)
 
         alphas_cumprod = self.alphas_cumprod.gather(-1, t).reshape(-1, 1, 1, 1)
         alphas = self.alphas.gather(-1, t).reshape(-1, 1, 1, 1)
         noise_coef = (1-alphas) / torch.sqrt(1-alphas_cumprod)
         mean = 1 / alphas.sqrt() * (x - noise_coef * pred_noise)
+        if denoised_clamp:
+            mean = mean.clamp(min=-1, max=1)
+        # Experimentally, both betas and betas^wave had similar results.
+        # code uses betas as sigma square. 
         var = self.betas.gather(-1, t).view(-1, 1, 1, 1)
 
         noise = torch.randn(x.shape, device=x.device)
+
         return mean + (var**0.5)*noise
 
     @torch.no_grad()
     def q_sample(self, x: torch.Tensor, t: torch.Tensor, noise=None):
+        """
+        forward process or diffusion process. add Guassian noise to input.
+        Implementation of q(x_t|x_0).
+        """
         if noise is None:
             noise = torch.randn_like(x)
         
-        mean, var = self.q_xt_x0(x, t)
-        return mean + (var ** 0.5) * noise
-
-    @torch.no_grad()
-    def q_xt_x0(self, x0: torch.Tensor, t: torch.Tensor):
         mean = self.alphas_cumprod.gather(-1, t).reshape(-1, 1, 1, 1)
-        mean = mean.sqrt() * x
+        mean = mean.sqrt() * x0
         var = 1 - self.alphas_cumprod.gather(-1, t).reshape(-1, 1, 1, 1)
-        return mean, var
+        return mean + (var ** 0.5) * noise
 
     @torch.no_grad()
     def interpolate(self, x1, x2, t=None, lam=0.5):
@@ -124,9 +136,12 @@ class DiffusionModel(nn.Module):
         x2_start = self.q_sample(x, t=batched_t)
 
         x = (1-lam) * x1_start + lam * x2_start
+        x = x.clamp(min=-1, max=1)
         for _, t_ in tqdm(enumerate(range(t))):
             t = self.num_timesteps - t_ - 1
-            x = self.p_sample(x, x.new_full((n_samples,), t, dtype=torch.lonwwg))
+            x = self.p_sample(x, x.new_full((n_samples,), t, dtype=torch.long))
+            x = x.clamp(min=-1, max=1)
+        x = unscale_img_linear(x.clamp(min=-1, max=1))
         return x
         
 if __name__ == '__main__':

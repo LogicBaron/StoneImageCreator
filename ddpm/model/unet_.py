@@ -15,8 +15,10 @@ class UNet(nn.Module):
                  self_condition = False):
         super().__init__()
         self.n_resolutions = len(dim_mults)
+        dim_mults = [*map(lambda x: in_dim * x, dim_mults)]
+        in_out = list(zip(dim_mults[:-1], dim_mults[1:]))
         # base dimension
-        self.base_dim = in_dim
+        self.in_dim = in_dim
         out_dim = in_dim if out_dim is None else out_dim
         self.out_dim = out_dim
         # Time embeding channel is 4 times of image dimension.
@@ -28,29 +30,24 @@ class UNet(nn.Module):
         self.init_conv = nn.Conv2d(image_channel, in_dim, kernel_size = 3, padding = 1)
         # time projection
         self.time_emb = TimeEmbedding(time_dim)
-        # Down Process
+        # down-sampling module list
         self.downs = nn.ModuleList([])
-        in_dim = self.base_dim
-        for idx in range(len(dim_mults)):
-            out_dim = dim_mults[idx] * self.base_dim
-            self.downs.append(DownBlock(in_dim=in_dim, out_dim=out_dim, time_dim=time_dim, n_groups=8, has_attn=is_attn[idx]))
-            self.downs.append(DownBlock(in_dim=out_dim, out_dim=out_dim, time_dim=time_dim, n_groups=8, has_attn=is_attn[idx]))
-            if idx < len(dim_mults)-1:
-                self.downs.append(DownSample(out_dim, out_dim))
-            in_dim = out_dim
+
+        for idx, (dim1, dim2) in enumerate(in_out):
+            self.downs.append(DownBlock(in_dim=dim1, out_dim=dim2, time_dim=time_dim, n_groups=8, has_attn=is_attn[idx]))
+            self.downs.append(DownBlock(in_dim=dim2, out_dim=dim2, time_dim=time_dim, n_groups=8, has_attn=is_attn[idx]))
+            if idx < len(in_out) - 1:
+                self.downs.append(DownSample(dim2, dim2))
+
         # Middle Process
-        self.mid = MidBlock(out_dim, time_dim, n_groups=8)
-        # Up Process
-        in_dim = out_dim
+        self.mid = MidBlock(dim_mults[-1], time_dim, n_groups=8)
+        # UpSampling
         self.ups = nn.ModuleList([])
-        for idx in reversed(range(len(dim_mults))):
-            out_dim = self.base_dim * dim_mults[idx-1] if idx>0 else self.base_dim
-            self.ups.append(UpBlock(2*in_dim, in_dim, time_dim=time_dim, n_groups=8, has_attn=is_attn[idx]))
-            self.ups.append(UpBlock(2*in_dim, out_dim, time_dim=time_dim, n_groups=8, has_attn=is_attn[idx]))
-            if idx > 0:
-                self.ups.append(UpSample(out_dim))
-            in_dim = out_dim
-            
+        for idx, (dim1, dim2) in enumerate(reversed(in_out)):
+            self.ups.append(UpBlock(2*dim2, dim1, time_dim=time_dim, n_groups=8, has_attn=is_attn[idx]))
+            self.ups.append(UpBlock(dim1+dim2, dim1, time_dim=time_dim, n_groups=8, has_attn=is_attn[idx]))
+            if idx < len(in_out) - 1:
+                self.ups.append(UpSample(dim1))
         # final
         self.final_norm = nn.GroupNorm(8, in_dim)
         self.final_act = nn.GELU()
