@@ -62,3 +62,10 @@ The lower the image, the deeper the t is.
 ---
 ![celeb_interpolation_0](https://user-images.githubusercontent.com/59866074/220822659-55dbd470-82aa-4190-b06c-e6ad5c5aa6a0.png)
 
+
+## Ref
+- DDPM paper : https://arxiv.org/abs/2006.11239
+- UNet paper : [[https://arxiv.org/pdf/1505.04597.pdf]()](https://arxiv.org/abs/1505.04597)
+- Perceptron Prioritized Training : https://arxiv.org/abs/2204.00227
+- self conditioning on diffusion model(not implemented) : https://arxiv.org/abs/2108.02938
+
