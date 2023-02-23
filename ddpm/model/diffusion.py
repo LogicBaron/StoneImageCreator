@@ -134,6 +134,8 @@ class DiffusionModel(nn.Module):
         assert x1.shape == x2.shape
 
         batched_t = torch.full((b,), t, device=device, dtype=torch.long)
+        x1 = scale_img_linear(x1)
+        x2 = scale_img_linear(x2)
         x1_t = self.q_sample(x1, t=batched_t)
         x2_t = self.q_sample(x2, t=batched_t)
         x_t = (1-lam) * x1_t + lam * x2_t
