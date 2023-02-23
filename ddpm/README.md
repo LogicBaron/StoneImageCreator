@@ -36,7 +36,9 @@ gresses, you can see that the following images are generated according to the St
 >> python train.py
 ```
 <img width="1042" alt="butterfly_images" src="https://user-images.githubusercontent.com/59866074/220822547-bc5b9ded-dac5-4ee8-8f66-ceef492a6f0c.png">
+
 ![sample_78](https://user-images.githubusercontent.com/59866074/220822761-10c85c67-b2f2-4aff-afea-1a5decd94cc8.png)
+
 
 ```python3
 # load model
