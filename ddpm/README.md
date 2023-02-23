@@ -29,6 +29,34 @@ diffusion.sample(num_samples=16,
 ```
 
 ## Train and Sampling
-As the training progresses, you can see that the following images are generated according to the Step.
+As the training pro
+gresses, you can see that the following images are generated according to the Step.
+``` shell
+# train
+>> python train.py
+```
+<img width="1042" alt="butterfly_images" src="https://user-images.githubusercontent.com/59866074/220822547-bc5b9ded-dac5-4ee8-8f66-ceef492a6f0c.png">
+![sample_78](https://user-images.githubusercontent.com/59866074/220822761-10c85c67-b2f2-4aff-afea-1a5decd94cc8.png)
+
+```python3
+# load model
+diffusion.load_state_dict(torch.load("path_to_best_model.pt"))
+
+# sample
+diffusion.sample(num_samples=16,
+                 img_channels=3,
+                 img_size=64)
+```
+
 
 ## Interpolation
+See `Interpolation.ipynb` notebook.
+
+The lower the image, the deeper the t is.
+
+![butterfly_interpolation_0](https://user-images.githubusercontent.com/59866074/220822652-c522b67c-a26f-4dca-9057-1d93f9ae3d8c.png)
+---
+![butterfly_interpolation_2](https://user-images.githubusercontent.com/59866074/220822657-0434dbfa-e7be-41df-89d0-9dcca0345c44.png)
+---
+![celeb_interpolation_0](https://user-images.githubusercontent.com/59866074/220822659-55dbd470-82aa-4190-b06c-e6ad5c5aa6a0.png)
+
