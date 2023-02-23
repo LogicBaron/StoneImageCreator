@@ -8,11 +8,7 @@ from transformers import CLIPImageProcessor
 from torchvision import transforms
 
 from model import UNet, DiffusionModel
-# from model.unet_ import UNet
-# from model.diffusion_ import DenoiseDiffusion
 from utils import make_grid
-
-from labml import lab, tracker, experiment, monit
 
 def transform(examples):
     jitter = transforms.Compose([
@@ -25,37 +21,29 @@ def transform(examples):
 
 def main():
     # load model
-    
     model = UNet(in_dim=64,
-                 #dim_mults = (1, 2, 2, 4, 8),
-                 #is_attn = (False, False, False, False, True)
                  dim_mults = (1, 2, 4, 8, 16),
                  is_attn = (False, False, False, True, True)
                  )
     diffusion = DiffusionModel(model = model,
                                num_timesteps=1_000)
-    # diffusion.load_state_dict(torch.load("best_model_399_.pt"))
     print(diffusion)
     # load data
-    dataset = load_dataset("huggan/smithsonian_butterflies_subset")
-    # dataset = load_dataset("tglcourse/CelebA-faces-cropped-128") #huggan/smithsonian_butterflies_subset
-    # simple transform
+    dataset = load_dataset("huggan/smithsonian_butterflies_subset") #"tglcourse/CelebA-faces-cropped-128"
     train_dataset = dataset['train']
     train_dataset.set_transform(transform)
     train_dataloader = DataLoader(train_dataset, batch_size=128)
-    # load optimizer, scheduler
     optimizer = torch.optim.AdamW(diffusion.parameters(), lr=2e-5)
-    # scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=2_000)
-    scheduler = torch.optim.lr_scheduler.CosineAnnealingWarmRestarts(optimizer, T_0=1_000)
-    diffusion.to(torch.device("cuda:6"))
+    scheduler = torch.optim.lr_scheduler.CosineAnnealingWarmRestarts(optimizer, T_0=2000)
+    diffusion.to(torch.device("cuda"))
 
     best_loss = 100
-    for epoch in range(5_000):
+    for epoch in range(1_000):
         # train
         print(f"{epoch}th epoch training...")
         loss_total = 0
         for batch_idx, batch in enumerate(tqdm(train_dataloader)):
-            data = batch['img_input'].to("cuda:6")
+            data = batch['img_input'].to("cuda")
             optimizer.zero_grad()
             loss = diffusion(data)
             loss.backward()
@@ -66,22 +54,14 @@ def main():
         loss_total = 0
         scheduler.step()
         # eval
-        if epoch < 1_000:
-            if epoch % 50 == 0:
-                with torch.no_grad():
-                    x = diffusion.sample(16,3,128)
-                imgs_grid = make_grid(x, 4, 4)
-                imgs_grid.save(f"sample/sample_{epoch}.png")
-                torch.save(diffusion.state_dict(), f"best_model.pt")
-        else:
-            if train_avg_loss < best_loss:
-                best_loss = train_avg_loss
-                with torch.no_grad():
-                    x = diffusion.sample(16,3,128)
-                imgs_grid = make_grid(x, 4, 4)
-                imgs_grid.save(f"sample/sample_{epoch}.png")
-                torch.save(diffusion.state_dict(), f"best_model.pt")
-    
+        if train_avg_loss < best_loss:
+            best_loss = train_avg_loss
+            with torch.no_grad():
+                x = diffusion.sample(16,3,128)
+            imgs_grid = make_grid(x, 4, 4)
+            imgs_grid.save(f"sample/sample_{epoch}.png")
+            torch.save(diffusion.state_dict(), f"best_model_butterfly.pt")
+
 
 if __name__ == "__main__":
     main()

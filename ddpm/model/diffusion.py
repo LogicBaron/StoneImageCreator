@@ -40,8 +40,8 @@ class DiffusionModel(nn.Module):
         # p2 loss weight, from https://arxiv.org/abs/2204.00227
         p2_loss_weight_gamma = 0
         p2_loss_weight_k = 1
-        alphas_cumprod_prev = F.pad(alphas_cumprod[:-1], (1, 0), value = 1.)
-        self.p2_loss_weight = (p2_loss_weight_k + alphas_cumprod / (1 - alphas_cumprod)) ** -p2_loss_weight_gamma)
+        self.register_buffer('p2_loss_weight',
+            (p2_loss_weight_k + self.alphas_cumprod / (1 - self.alphas_cumprod)) ** -p2_loss_weight_gamma)
 
         # sampling
         self.sampling_timesteps = sampling_timesteps if sampling_timesteps is not None else num_timesteps
@@ -121,7 +121,7 @@ class DiffusionModel(nn.Module):
             noise = torch.randn_like(x)
         
         mean = self.alphas_cumprod.gather(-1, t).reshape(-1, 1, 1, 1)
-        mean = mean.sqrt() * x0
+        mean = mean.sqrt() * x
         var = 1 - self.alphas_cumprod.gather(-1, t).reshape(-1, 1, 1, 1)
         return mean + (var ** 0.5) * noise
 
@@ -133,17 +133,15 @@ class DiffusionModel(nn.Module):
 
         assert x1.shape == x2.shape
 
-        batched_t = torch.full((b,), t, device=device, dtype=torch.float)
-        x1_start = self.q_sample(x, t=batched_t)
-        x2_start = self.q_sample(x, t=batched_t)
+        batched_t = torch.full((b,), t, device=device, dtype=torch.long)
+        x1_t = self.q_sample(x1, t=batched_t)
+        x2_t = self.q_sample(x2, t=batched_t)
+        x_t = (1-lam) * x1_t + lam * x2_t
 
-        x = (1-lam) * x1_start + lam * x2_start
-        x = x.clamp(min=-1, max=1)
         for _, t_ in tqdm(enumerate(range(t))):
-            t = self.num_timesteps - t_ - 1
-            x = self.p_sample(x, x.new_full((n_samples,), t, dtype=torch.long))
-            x = x.clamp(min=-1, max=1)
-        x = unscale_img_linear(x.clamp(min=-1, max=1))
+            step = t - t_ - 1
+            x_t = self.p_sample(x_t, x_t.new_full((b,), step, dtype=torch.long))
+        x = unscale_img_linear(x_t.clamp(min=-1, max=1))
         return x
         
 if __name__ == '__main__':
